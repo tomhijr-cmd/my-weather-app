@@ -239,6 +239,71 @@
       margin-top: 24px;
     }
 
+    /* City info section */
+    .city-info {
+      width: 100%;
+      max-width: 480px;
+      background: rgba(255,255,255,0.06);
+      backdrop-filter: blur(20px);
+      border-radius: 28px;
+      border: 1px solid rgba(255,255,255,0.1);
+      padding: 28px 36px;
+      margin-top: 16px;
+      display: none;
+      animation: fadeUp 0.4s ease;
+    }
+
+    .city-info.visible {
+      display: block;
+    }
+
+    .city-info-title {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      opacity: 0.5;
+      margin-bottom: 20px;
+    }
+
+    .local-time {
+      font-size: 3.2rem;
+      font-weight: 200;
+      letter-spacing: -1px;
+      line-height: 1;
+      margin-bottom: 4px;
+    }
+
+    .local-date {
+      font-size: 1rem;
+      opacity: 0.6;
+      margin-bottom: 20px;
+    }
+
+    .city-info-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    .info-chip {
+      background: rgba(255,255,255,0.07);
+      border-radius: 12px;
+      padding: 12px 16px;
+    }
+
+    .info-chip-label {
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      opacity: 0.45;
+      margin-bottom: 4px;
+    }
+
+    .info-chip-value {
+      font-size: 0.95rem;
+      font-weight: 500;
+    }
+
     /* Recent searches */
     .recent {
       width: 100%;
@@ -365,6 +430,31 @@
     <div class="updated" id="updated"></div>
   </div>
 
+  <!-- City Info Card -->
+  <div class="city-info" id="cityInfo">
+    <div class="city-info-title">🕐 Local Time</div>
+    <div class="local-time" id="localTime">--:--:--</div>
+    <div class="local-date" id="localDate"></div>
+    <div class="city-info-grid">
+      <div class="info-chip">
+        <div class="info-chip-label">Timezone</div>
+        <div class="info-chip-value" id="infoTimezone">—</div>
+      </div>
+      <div class="info-chip">
+        <div class="info-chip-label">UTC Offset</div>
+        <div class="info-chip-value" id="infoOffset">—</div>
+      </div>
+      <div class="info-chip">
+        <div class="info-chip-label">Day of Week</div>
+        <div class="info-chip-value" id="infoDayOfWeek">—</div>
+      </div>
+      <div class="info-chip">
+        <div class="info-chip-label">Daylight Saving</div>
+        <div class="info-chip-value" id="infoDst">—</div>
+      </div>
+    </div>
+  </div>
+
   <div class="recent" id="recentSection" style="display:none">
     <h3>Recent Searches</h3>
     <div class="recent-list" id="recentList"></div>
@@ -485,6 +575,73 @@
       });
     }
 
+    // ── City Info / Local Time ────────────────────────────────────────────────
+    let clockInterval = null;
+
+    function formatOffset(offsetSeconds) {
+      const totalMinutes = Math.abs(offsetSeconds) / 60;
+      const h = Math.floor(totalMinutes / 60);
+      const m = totalMinutes % 60;
+      const sign = offsetSeconds >= 0 ? '+' : '-';
+      return `UTC ${sign}${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+    }
+
+    function tickClock(baseDateTime, fetchedAt, offsetSeconds) {
+      // Calculate current local time from base + elapsed seconds
+      const elapsed = Math.floor((Date.now() - fetchedAt) / 1000);
+      const localMs = new Date(baseDateTime).getTime() + elapsed * 1000;
+      const d = new Date(localMs);
+
+      const hh = String(d.getUTCHours()).padStart(2, '0');
+      const mm = String(d.getUTCMinutes()).padStart(2, '0');
+      const ss = String(d.getUTCSeconds()).padStart(2, '0');
+      $('localTime').textContent = `${hh}:${mm}:${ss}`;
+    }
+
+    async function fetchCityTime(timezone) {
+      try {
+        const url = `https://timeapi.io/api/time/current/zone?timeZone=${encodeURIComponent(timezone)}`;
+        const res = await fetch(url);
+        if (!res.ok) return;
+        const data = await res.json();
+
+        // Show the date
+        const days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+        $('localDate').textContent = `${data.dayOfWeek}, ${data.date}`;
+        $('infoDayOfWeek').textContent = data.dayOfWeek;
+        $('infoTimezone').textContent = timezone.replace('_', ' ');
+        $('infoDst').textContent = data.dstActive ? '✅ Active' : '❌ Inactive';
+
+        // Get UTC offset from Open-Meteo timezone (already have it via data.utcOffset)
+        // Use dateTime from response to drive the live clock
+        const fetchedAt = Date.now();
+        const baseDateTime = data.dateTime; // ISO string in local time
+
+        // Compute offset in seconds from the ISO string vs UTC
+        const localDate = new Date(data.dateTime);
+        const utcDate   = new Date(data.dateTime + 'Z'); // treat as UTC to get raw ms
+        // We'll just display the offset from the timezone string label
+        $('infoOffset').textContent = formatOffset(
+          (localDate.getTime() - utcDate.getTime()) / 1000 * -1
+        );
+
+        // Clear old clock, start new one
+        if (clockInterval) clearInterval(clockInterval);
+
+        // Immediate tick
+        tickClock(baseDateTime + 'Z', fetchedAt, 0);
+
+        // Tick every second — adjust by elapsed time since fetch
+        clockInterval = setInterval(() => {
+          tickClock(baseDateTime + 'Z', fetchedAt, 0);
+        }, 1000);
+
+        $('cityInfo').classList.add('visible');
+      } catch (e) {
+        // Silently fail — city info is a bonus feature
+      }
+    }
+
     // ── API calls ─────────────────────────────────────────────────────────────
     async function searchCities(query) {
       const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(query)}&count=5&language=en`;
@@ -511,6 +668,7 @@
         const data = await res.json();
 
         renderWeather(data, location);
+        fetchCityTime(data.timezone);
         saveRecent(location);
         renderRecent();
       } catch (err) {
