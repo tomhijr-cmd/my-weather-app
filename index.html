@@ -517,6 +517,7 @@
       $('error').textContent = msg;
       $('error').classList.add('visible');
       $('card').classList.remove('visible');
+      $('cityInfo').classList.remove('visible');
     }
 
     function clearError() {
@@ -586,8 +587,8 @@
       return `UTC ${sign}${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
     }
 
-    function tickClock(baseDateTime, fetchedAt, offsetSeconds) {
-      // Calculate current local time from base + elapsed seconds
+    function tickClock(baseDateTime, fetchedAt) {
+      // Calculate current local time from base + elapsed seconds since fetch
       const elapsed = Math.floor((Date.now() - fetchedAt) / 1000);
       const localMs = new Date(baseDateTime).getTime() + elapsed * 1000;
       const d = new Date(localMs);
@@ -605,36 +606,21 @@
         if (!res.ok) return;
         const data = await res.json();
 
-        // Show the date
-        const days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
         $('localDate').textContent = `${data.dayOfWeek}, ${data.date}`;
         $('infoDayOfWeek').textContent = data.dayOfWeek;
-        $('infoTimezone').textContent = timezone.replace('_', ' ');
+        $('infoTimezone').textContent = timezone.replace(/_/g, ' ');
         $('infoDst').textContent = data.dstActive ? '✅ Active' : '❌ Inactive';
 
-        // Get UTC offset from Open-Meteo timezone (already have it via data.utcOffset)
-        // Use dateTime from response to drive the live clock
+        // utcOffset from the API is in seconds (e.g. 3600 for UTC+1)
+        $('infoOffset').textContent = formatOffset(data.utcOffset);
+
+        // Drive a live clock: record the local time at fetch, then tick forward
         const fetchedAt = Date.now();
-        const baseDateTime = data.dateTime; // ISO string in local time
+        const baseDateTime = data.dateTime + 'Z'; // treat local ISO string as UTC base
 
-        // Compute offset in seconds from the ISO string vs UTC
-        const localDate = new Date(data.dateTime);
-        const utcDate   = new Date(data.dateTime + 'Z'); // treat as UTC to get raw ms
-        // We'll just display the offset from the timezone string label
-        $('infoOffset').textContent = formatOffset(
-          (localDate.getTime() - utcDate.getTime()) / 1000 * -1
-        );
-
-        // Clear old clock, start new one
         if (clockInterval) clearInterval(clockInterval);
-
-        // Immediate tick
-        tickClock(baseDateTime + 'Z', fetchedAt, 0);
-
-        // Tick every second — adjust by elapsed time since fetch
-        clockInterval = setInterval(() => {
-          tickClock(baseDateTime + 'Z', fetchedAt, 0);
-        }, 1000);
+        tickClock(baseDateTime, fetchedAt);
+        clockInterval = setInterval(() => tickClock(baseDateTime, fetchedAt), 1000);
 
         $('cityInfo').classList.add('visible');
       } catch (e) {
@@ -646,6 +632,7 @@
     async function searchCities(query) {
       const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(query)}&count=5&language=en`;
       const res = await fetch(url);
+      if (!res.ok) throw new Error('Geocoding fetch failed');
       const data = await res.json();
       return data.results || [];
     }
@@ -700,8 +687,16 @@
         cities.forEach(city => {
           const item = document.createElement('div');
           item.className = 'suggestion-item';
-          const label = [city.admin1, city.country].filter(Boolean).join(', ');
-          item.innerHTML = `<strong>${city.name}</strong><span class="country">${label}</span>`;
+
+          const name = document.createElement('strong');
+          name.textContent = city.name;
+
+          const label = document.createElement('span');
+          label.className = 'country';
+          label.textContent = [city.admin1, city.country].filter(Boolean).join(', ');
+
+          item.appendChild(name);
+          item.appendChild(label);
           item.addEventListener('click', () => fetchWeather(city));
           box.appendChild(item);
         });
@@ -712,21 +707,21 @@
       const q = $('searchInput').value.trim();
       if (!q) return;
 
-      setLoading(true);
       clearError();
       hideSuggestions();
+      setLoading(true);
 
       try {
         const cities = await searchCities(q);
         if (cities.length === 0) {
+          setLoading(false);
           showError('City not found. Please try a different name.');
         } else {
-          fetchWeather(cities[0]);
+          fetchWeather(cities[0]); // fetchWeather manages setLoading(false) in its finally block
         }
       } catch {
-        showError('Search failed. Please check your connection.');
-      } finally {
         setLoading(false);
+        showError('Search failed. Please check your connection.');
       }
     });
 
